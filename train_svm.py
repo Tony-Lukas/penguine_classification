@@ -5,11 +5,16 @@ import os
 
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+
+import pickle
 
 # hyper-parameters
-C_param = 10.0
+C_param = 1.0
 kernel_param = "rbf"
 
 # Set the MLflow expriment name
@@ -22,7 +27,7 @@ with mlflow.start_run():
     df = df.dropna()
     y = df["species"]
     X = df.drop(columns=["species"])
-    X = pd.get_dummies(X, columns=["island", "sex"])
+    # X = pd.get_dummies(X, columns=["island", "sex"])
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -31,10 +36,29 @@ with mlflow.start_run():
     le = LabelEncoder()
     y_train = le.fit_transform(y_train)
     y_test = le.transform(y_test)
+    pickle.dump(le, open("le.pkl", "wb"))
 
-    mm_scale = MinMaxScaler()
-    X_train = mm_scale.fit_transform(X_train)
-    X_test = mm_scale.transform(X_test)
+    # pipline
+    num_col = X_train.select_dtypes(include="number").columns
+    cat_col = X_train.select_dtypes(include="object").columns
+
+    num_transformer = Pipeline(
+        steps=[("imputer", SimpleImputer(strategy="mean")), ("scale", StandardScaler())]
+    )
+    cat_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", num_transformer, num_col),
+            ("cat", cat_transformer, cat_col),
+        ],
+        remainder="drop",
+    )
 
     # log hyper-parameters
     mlflow.log_param("C", C_param)
@@ -44,9 +68,12 @@ with mlflow.start_run():
 
     # model train
     model = SVC(C=C_param, kernel=kernel_param, random_state=42)
-    model.fit(X_train, y_train)
 
-    y_pred = model.predict(X_test)
+    pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+
+    pipeline.fit(X_train, y_train)
+
+    y_pred = pipeline.predict(X_test)
 
     acc = accuracy_score(y_test, y_pred)
     pre = precision_score(y_test, y_pred, average="macro")
@@ -61,7 +88,9 @@ with mlflow.start_run():
 
     print(f"Model Accuracy: {acc:.4f}")
     # log model Artifact
-    mlflow.sklearn.log_model(model, name="svm_model", input_example=X_test[0:5])
+    mlflow.sklearn.log_model(
+        pipeline, name="svm_full_pipeline", input_example=X_test[0:5]
+    )
 
     mlflow.set_tag("git_commit", os.popen("git rev-parse HEAD").read().strip())
 
