@@ -1,0 +1,6 @@
+dvc
+scikit-learn
+pandas
+mlflow
+
+gradio
